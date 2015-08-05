@@ -400,7 +400,7 @@ if __name__ == "__main__":
     fhmm.initialize(options.corpus_file, options.features_fired, options.possible_states, options.intermediate_results)
     # fhmm.get_likelihood(fhmm.theta)
 
-    fhmm.train(maxiter=5)
+    fhmm.train(maxiter=10)
     fhmm.save('saved.model')
     # fhmm2 = pickle.load(file('saved.model'))
     # print fhmm2.tag("The Man is eating .")
