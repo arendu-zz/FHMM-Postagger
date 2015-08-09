@@ -65,6 +65,7 @@ class FeaturizedHMMTagger(object):
         self.load_possible_states(possible_states_file)
         self.prepare_corpus(corpus_file)
         self.load_feature_firing(feature_firing_file)
+        self.load_transition_features()
         self.theta = np.random.uniform(1.0, 1.0, len(self.feature2index))
         sys.stderr.write('initialized\n')
         sys.stderr.write('num features:' + str(len(self.feature2index)) + '\n')
@@ -92,6 +93,25 @@ class FeaturizedHMMTagger(object):
             c.append(END_SYM)
             self.corpus.append(c)
 
+    def load_transition_features(self):
+        for c in self.corpus:
+            for o_idx, o in enumerate(c):
+                if o_idx > 0:
+                    prev_obs = c[o_idx - 1]
+                    prev_possible_tags = self.get_possible_states(prev_obs)
+                    current_obs = c[o_idx]
+                    current_possible_tags = self.get_possible_states(current_obs)
+                    for s1 in current_possible_tags:
+                        for s2 in prev_possible_tags:
+                            f = (s1, s2)
+                            e = (T_TYPE, s1, s2)  # p(s1 | s2)
+                            ndm = self.normalizing_decision_map.get((T_TYPE, s2), set([]))
+                            ndm.add(s1)
+                            self.normalizing_decision_map[T_TYPE, s2] = ndm
+                            f_id = self._get_feature_id(f)
+                            self._add_feature_to_event(e, f_id)
+
+
     def _get_feature_id(self, f):
         if f in self.feature2index:
             pass
@@ -118,16 +138,6 @@ class FeaturizedHMMTagger(object):
                     f = (i, ps)
                     f_id = self._get_feature_id(f)
                     self._add_feature_to_event(e, f_id)
-
-        for s1 in self.ALL_STATES + [END_SYM]:
-            for s2 in self.ALL_STATES + [START_SYM]:
-                if s1 == START_SYM and s2 == END_SYM:
-                    pass
-                else:
-                    f = (s1, s2)
-                    e = (T_TYPE, s1, s2)  # p(s1 | s2)
-                    f_id = self._get_feature_id(f)
-                    self._add_feature_to_event(e, f_id)
         self.event2featureids[E_TYPE, END_SYM, END_SYM] = []
         self.event2featureids[E_TYPE, START_SYM, START_SYM] = []
 
@@ -149,10 +159,6 @@ class FeaturizedHMMTagger(object):
                 all_ps.update(ps_line[1:])
 
         self.ALL_STATES = list(all_ps)
-
-        for ps in self.ALL_STATES:
-            self.normalizing_decision_map[(T_TYPE, ps)] = set([i for i in self.ALL_STATES])
-        self.normalizing_decision_map[(T_TYPE, START_SYM)] = set([i for i in self.ALL_STATES])
         self.normalizing_decision_map[(E_TYPE, END_SYM)] = set([END_SYM])
         self.normalizing_decision_map[(E_TYPE, START_SYM)] = set([START_SYM])
 
@@ -187,13 +193,9 @@ class FeaturizedHMMTagger(object):
 
             theta_dot_normalizing_features = log(theta_dot_normalizing_features)
             self.cache_normalizing_decision[type, context] = theta_dot_normalizing_features
-        log_prob = round(theta_dot_features - theta_dot_normalizing_features, 10)
+        log_prob = round(theta_dot_features - theta_dot_normalizing_features, 8)
         if log_prob > 0.0:
-
-            if self.train_method == 'DGD':
-                raise Exception
-            else:
-                log_prob = 0.0  # TODO figure out why in the EM algorithm this error happens?
+            log_prob = 0.0  # TODO figure out why in the EM algorithm this error happens?
         return log_prob
 
     def get_possible_states(self, obs):
@@ -388,6 +390,26 @@ class FeaturizedHMMTagger(object):
         return max_bt
 
 
+def gradient_check_lbfgs():
+    fhmm_check = FeaturizedHMMTagger()
+    fhmm_check.initialize('data/corpus.test', 'data/test.features', 'data/possible.tags.test')
+    init_theta = fhmm_check.theta
+    EPS = 1e-5
+    chk_grad = utils.gradient_checking(init_theta, EPS, fhmm_check.get_likelihood)
+    my_grad = fhmm_check.get_gradient(init_theta)
+    diff = []
+    for f in sorted(fhmm_check.feature2index):
+        k = fhmm_check.feature2index[f]
+        diff.append(abs(my_grad[k] - chk_grad[k]))
+        print str(round(my_grad[k] - chk_grad[k], 5)).center(10), str(
+            round(my_grad[k], 5)).center(10), \
+            str(round(chk_grad[k], 5)).center(10), f
+
+    print 'component difference:', round(sum(diff), 3), \
+        'cosine similarity:', utils.cosine_sim(chk_grad, my_grad), \
+        ' sign difference', utils.sign_difference(chk_grad, my_grad)
+
+
 if __name__ == "__main__":
     opt = OptionParser()
     # insert options here
@@ -396,10 +418,9 @@ if __name__ == "__main__":
     opt.add_option('--corpus', dest='corpus_file', default='data/corpus.ps-en.ps')
     opt.add_option('--intermediate-results', dest='intermediate_results')
     (options, _) = opt.parse_args()
+    # gradient_check_lbfgs()
     fhmm = FeaturizedHMMTagger()
     fhmm.initialize(options.corpus_file, options.features_fired, options.possible_states, options.intermediate_results)
-    # fhmm.get_likelihood(fhmm.theta)
-
     fhmm.train(maxiter=5)
     fhmm.save('saved.model')
     # fhmm2 = pickle.load(file('saved.model'))
