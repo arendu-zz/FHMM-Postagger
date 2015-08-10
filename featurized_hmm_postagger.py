@@ -60,6 +60,22 @@ class FeaturizedHMMTagger(object):
         self.word_id = {}
         self.intermediate_results = None
 
+    def unknown_event_features(self, event):
+        (type, obs, ps) = event
+        unknown_obs_features_fired = []
+        f = (obs[:1], ps)
+        f_id = self._get_feature_id(f, add_if_absent=False)
+        if f_id is not None:
+            unknown_obs_features_fired.append(f_id)
+        f = (obs[-1:], ps)
+        f_id = self._get_feature_id(f, add_if_absent=False)
+        if f_id is not None:
+            unknown_obs_features_fired.append(f_id)
+        f_rare = ('RARE',)
+        f_id = self._get_feature_id(f_rare)
+        unknown_obs_features_fired.append(f_id)
+        return set(unknown_obs_features_fired)
+
     def initialize(self, corpus_file, feature_firing_file, possible_states_file, intermediate_results=None):
         self.intermediate_results = intermediate_results
         self.load_possible_states(possible_states_file)
@@ -92,6 +108,7 @@ class FeaturizedHMMTagger(object):
                     self.word_count[word] = 1
             c.append(END_SYM)
             self.corpus.append(c)
+        return True
 
     def load_transition_features(self):
         for c in self.corpus:
@@ -112,12 +129,16 @@ class FeaturizedHMMTagger(object):
                             self._add_feature_to_event(e, f_id)
 
 
-    def _get_feature_id(self, f):
+    def _get_feature_id(self, f, add_if_absent=True):
         if f in self.feature2index:
-            pass
+            return self.feature2index[f]
         else:
-            self.feature2index[f] = len(self.feature2index)
-        return self.feature2index[f]
+            if add_if_absent:
+                self.feature2index[f] = len(self.feature2index)
+                return self.feature2index[f]
+            else:
+                return None
+
 
     def _add_feature_to_event(self, e, f_id):
         assert isinstance(e, tuple) and len(e) == 3
@@ -132,12 +153,19 @@ class FeaturizedHMMTagger(object):
             items = line.split()
             obs = items[0]
             possible_states = self.get_possible_states(obs)
-            for ps in possible_states:  # + [ANY_STATE]:
+            for ps in possible_states:
                 e = (E_TYPE, obs, ps)
                 for i in items[1:]:
                     f = (i, ps)
                     f_id = self._get_feature_id(f)
                     self._add_feature_to_event(e, f_id)
+                count = self.word_count[obs]
+                if count <= 1:
+                    pass
+                    f = ('RARE',)
+                    f_id = self._get_feature_id(f)
+                    self._add_feature_to_event(e, f_id)
+
         self.event2featureids[E_TYPE, END_SYM, END_SYM] = []
         self.event2featureids[E_TYPE, START_SYM, START_SYM] = []
 
@@ -163,15 +191,15 @@ class FeaturizedHMMTagger(object):
         self.normalizing_decision_map[(E_TYPE, START_SYM)] = set([START_SYM])
 
     def get_features_fired(self, event_type, context, decision):
-
         ff = []
-        if event_type == E_TYPE:
-            ff += self.event2featureids[(E_TYPE, decision, context)]
-            return ff
-        else:
-            e = (T_TYPE, decision, context)
+        e = (event_type, decision, context)
+        if e in self.event2featureids:
             ff += self.event2featureids[e]
-            return ff
+        else:
+            rare_ff = self.unknown_event_features(e)
+            ff += rare_ff
+        return ff
+
 
     def get_decision_given_context(self, theta, type, decision, context):
         # global normalizing_decision_map, cache_normalizing_decision, feature_index, dictionary_features
@@ -394,7 +422,7 @@ def gradient_check_lbfgs():
     fhmm_check = FeaturizedHMMTagger()
     fhmm_check.initialize('data/corpus.test', 'data/test.features', 'data/possible.tags.test')
     init_theta = fhmm_check.theta
-    EPS = 1e-5
+    EPS = 1e-3
     chk_grad = utils.gradient_checking(init_theta, EPS, fhmm_check.get_likelihood)
     my_grad = fhmm_check.get_gradient(init_theta)
     diff = []
@@ -413,17 +441,17 @@ def gradient_check_lbfgs():
 if __name__ == "__main__":
     opt = OptionParser()
     # insert options here
-    opt.add_option('--possible-states', dest='possible_states', default='data/possible.tags')
-    opt.add_option('--features-fired', dest='features_fired', default='data/ps.features')
-    opt.add_option('--corpus', dest='corpus_file', default='data/corpus.ps-en.ps')
+    opt.add_option('--possible-states', dest='possible_states', default='data/possible.tags.test')
+    opt.add_option('--features-fired', dest='features_fired', default='data/test.features')
+    opt.add_option('--corpus', dest='corpus_file', default='data/corpus.test')
     opt.add_option('--intermediate-results', dest='intermediate_results')
     (options, _) = opt.parse_args()
     # gradient_check_lbfgs()
+    # exit()
     fhmm = FeaturizedHMMTagger()
     fhmm.initialize(options.corpus_file, options.features_fired, options.possible_states, options.intermediate_results)
-
     fhmm.train(maxiter=10)
     fhmm.save('saved.model')
-    # fhmm2 = pickle.load(file('saved.model'))
-    # print fhmm2.tag("The Man is eating .")
+    fhmm2 = pickle.load(file('saved.model'))
+    print fhmm2.tag("The Man is eating .")
 
